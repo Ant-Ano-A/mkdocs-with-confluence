@@ -17,6 +17,10 @@ from os import environ
 from pathlib import Path
 
 TEMPLATE_BODY = "<p> TEMPLATE </p>"
+HEADER_WARNING = "‼️ This page is created automatically, all you changes will be overwritten during the next MKDocs deployment. Do not edit a page here ‼️"
+# SECTION_PAGE_CONTENT =  "<p> It's just a Section Page </p>"
+# PAGE_LABEL = "synced_from_mkdocs"
+
 
 
 @contextlib.contextmanager
@@ -44,6 +48,9 @@ class MkdocsWithConfluence(BasePlugin):
         ("verbose", config_options.Type(bool, default=False)),
         ("debug", config_options.Type(bool, default=False)),
         ("dryrun", config_options.Type(bool, default=False)),
+        ("header_message", config_options.Type(str, default=None)),
+        ("upstream_url", config_options.Type(str, default=None)),
+        ("header_warning", config_options.Type(str, default=HEADER_WARNING)),
     )
 
     def __init__(self):
@@ -54,6 +61,9 @@ class MkdocsWithConfluence(BasePlugin):
         self.flen = 1
         self.session = requests.Session()
         self.page_attachments = {}
+        self.repo_url = None
+        self.header_message = None
+        self.upstream_url = None
 
     def on_nav(self, nav, config, files):
         MkdocsWithConfluence.tab_nav = []
@@ -143,6 +153,28 @@ class MkdocsWithConfluence(BasePlugin):
             self.dryrun = True
         else:
             self.dryrun = False
+        
+        # ------------------------------------------------------
+        # -- Set git url to add to a confluence page
+        # ------------------------------------------------------
+        if config["repo_url"]:
+            self.repo_url = config["repo_url"]
+            print("INFO    -  Mkdocs With Confluence: set git url")
+
+        # ------------------------------------------------------
+        # --  Set a custom header to add to a confluence page
+        # ------------------------------------------------------
+        if self.config["header_message"]:
+            self.header_message = self.config["header_message"]
+            print("INFO    -  Mkdocs With Confluence: set header message")
+
+        # ------------------------------------------------------
+        # --  Set an upstream url to add to a confluence page
+        # ------------------------------------------------------
+        if self.config["upstream_url"]:
+            self.upstream_url = self.config["upstream_url"]
+            print("INFO    -  Mkdocs With Confluence: set upstream url")
+
 
     def on_page_markdown(self, markdown, page, config, files):
         MkdocsWithConfluence._id += 1
@@ -214,13 +246,26 @@ class MkdocsWithConfluence(BasePlugin):
                 tf = tempfile.NamedTemporaryFile(delete=False)
                 f = open(tf.name, "w")
 
+                new_markdown = markdown
+                # -- Adding an upstream url
+                if self.upstream_url:
+                    new_markdown = f">Original page is here: {self.upstream_url}/{page.url}\n\n" + new_markdown
+                # -- Adding a header message
+                if self.header_message:
+                    new_markdown = f">{self.header_message}\n\n" + new_markdown
+                # -- Adding a repo url
+                if self.repo_url:
+                    new_markdown = f">You can edit documentation here: {self.repo_url}\n\n" + new_markdown
+                # -- Adding a header warning                
+                new_markdown = f">{self.config['header_warning']}\n\n" + new_markdown
+
                 attachments = []
                 try:
-                    for match in re.finditer(r'img src="file://(.*)" s', markdown):
+                    for match in re.finditer(r'img src="file://(.*)" s', new_markdown):
                         if self.config["debug"]:
                             print(f"DEBUG    - FOUND IMAGE: {match.group(1)}")
                         attachments.append(match.group(1))
-                    for match in re.finditer(r"!\[[\w\. -]*\]\((?!http|file)([^\s,]*).*\)", markdown):
+                    for match in re.finditer(r"!\[[\w\. -]*\]\((?!http|file)([^\s,]*).*\)", new_markdown):
                         file_path = match.group(1).lstrip("./\\")
                         attachments.append(file_path)
 
@@ -232,7 +277,7 @@ class MkdocsWithConfluence(BasePlugin):
                     if self.config["debug"]:
                         print(f"DEBUG    - WARN(({e}): No images found in markdown. Proceed..")
                 new_markdown = re.sub(
-                    r'<img src="file:///tmp/', '<p><ac:image ac:height="350"><ri:attachment ri:filename="', markdown
+                    r'<img src="file:///tmp/', '<p><ac:image ac:height="350"><ri:attachment ri:filename="', new_markdown
                 )
                 new_markdown = re.sub(r'" style="page-break-inside: avoid;">', '"/></ac:image></p>', new_markdown)
                 confluence_body = self.confluence_mistune(new_markdown)
